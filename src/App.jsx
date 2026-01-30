@@ -38,3 +38,6 @@ const processRecording = async (audioBlob) => {
       setError('Failed to submit insight. Please try again.');
     }
   };
+};
+
+export default WhisperApp;
