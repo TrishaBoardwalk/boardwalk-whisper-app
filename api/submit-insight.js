@@ -1,16 +1,12 @@
-import { put, list } from '@vercel/blob';
+import { put } from '@vercel/blob';
 
-export const config = {
-  runtime: 'edge',
-};
-
-export default async function handler(req) {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const body = await req.json();
+    const body = req.body;
     const { transcription, userName, timestamp } = body;
 
     // Simple AI detection
@@ -36,7 +32,7 @@ export default async function handler(req) {
       access: 'public',
     });
 
-    return new Response(JSON.stringify({
+    return res.status(200).json({
       success: true,
       insight: {
         transcription: insight.transcription,
@@ -47,16 +43,10 @@ export default async function handler(req) {
           suggestion: aiDetection.suggestion
         }
       }
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
     });
 
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return res.status(500).json({ error: error.message });
   }
 }
 
