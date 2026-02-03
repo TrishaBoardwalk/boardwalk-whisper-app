@@ -343,13 +343,14 @@ const WhisperApp = () => {
       <div className="bg-white border-b p-4">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-center flex-1">
-              <h1 className="text-2xl font-bold" style={{ color: '#00b3c2', fontFamily: 'cursive' }}>
-                Boardwalk
-              </h1>
-              <p className="text-xs text-gray-500">BOUTIQUE HOTEL ARUBA</p>
-            </div>
-            
+            <div className="flex-1 flex justify-center">
+  <img 
+    src="/Boardwalk_LogoStamp.png" 
+    alt="Boardwalk Boutique Hotel" 
+    className="h-16 w-16"
+  />
+</div>
+          
             {/* Online/Offline Status */}
             <div className="flex items-center space-x-2">
               {isOnline ? (
