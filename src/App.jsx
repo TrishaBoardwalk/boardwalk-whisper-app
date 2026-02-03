@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Sparkles, Send, Globe } from 'lucide-react';
+import { Mic, MicOff, Sparkles, Send, Globe, WifiOff, Wifi, Cloud, CloudOff } from 'lucide-react';
 
 const WhisperApp = () => {
   const [userName, setUserName] = useState('');
@@ -11,6 +11,9 @@ const WhisperApp = () => {
   const [showConfetti, setShowConfetti] = useState(false);
   const [lastInsight, setLastInsight] = useState(null);
   const [error, setError] = useState(null);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingQueue, setPendingQueue] = useState([]);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -19,11 +22,22 @@ const WhisperApp = () => {
   const timerRef = useRef(null);
   const audioChunksRef = useRef([]);
 
-  // Load saved name on mount
+  // Load saved name and pending queue on mount
   useEffect(() => {
     const savedName = localStorage.getItem('whisperUserName');
     if (savedName) {
       setUserName(savedName);
+    }
+
+    // Load pending queue from localStorage
+    const savedQueue = localStorage.getItem('whisperPendingQueue');
+    if (savedQueue) {
+      try {
+        const queue = JSON.parse(savedQueue);
+        setPendingQueue(queue);
+      } catch (e) {
+        console.error('Error loading pending queue:', e);
+      }
     }
   }, []);
 
@@ -33,6 +47,34 @@ const WhisperApp = () => {
       localStorage.setItem('whisperUserName', userName.trim());
     }
   }, [userName]);
+
+  // Monitor online/offline status
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      // Auto-sync when coming back online
+      if (pendingQueue.length > 0) {
+        syncPendingInsights();
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [pendingQueue]);
+
+  // Save pending queue to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('whisperPendingQueue', JSON.stringify(pendingQueue));
+  }, [pendingQueue]);
 
   // Recording timer
   useEffect(() => {
@@ -46,6 +88,58 @@ const WhisperApp = () => {
     }
     return () => clearInterval(timerRef.current);
   }, [isRecording]);
+
+  const syncPendingInsights = async () => {
+    if (pendingQueue.length === 0 || isSyncing) return;
+
+    setIsSyncing(true);
+    const failedInsights = [];
+
+    for (const insight of pendingQueue) {
+      try {
+        const response = await fetch('/api/submit-insight', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transcription: insight.transcription,
+            userName: insight.userName,
+            timestamp: insight.timestamp
+          })
+        });
+
+        if (!response.ok) {
+          failedInsights.push(insight);
+        }
+      } catch (error) {
+        console.error('Error syncing insight:', error);
+        failedInsights.push(insight);
+      }
+    }
+
+    // Update queue with only failed insights
+    setPendingQueue(failedInsights);
+    setIsSyncing(false);
+
+    if (failedInsights.length === 0) {
+      setError(null);
+      showSuccessMessage('All insights synced successfully! ✅');
+    } else {
+      setError(`${failedInsights.length} insights failed to sync. Will retry when online.`);
+    }
+  };
+
+  const showSuccessMessage = (message) => {
+    const tempInsight = {
+      transcription: message,
+      detected: { insightType: 'Success' }
+    };
+    setLastInsight(tempInsight);
+    setShowConfetti(true);
+    setTimeout(() => {
+      setShowConfetti(false);
+      setLastInsight(null);
+    }, 3000);
+  };
 
   const startRecording = async () => {
     try {
@@ -123,9 +217,7 @@ const WhisperApp = () => {
   };
 
   const processRecording = async (audioBlob) => {
-    // In production, you'd send the audio to backend for transcription
-    // For now, we'll use mock transcription but send to real API
-    
+    // Mock transcription for demo
     const mockTranscriptions = [
       "Guest in room 305 mentioned they are celebrating their anniversary tomorrow",
       "Guest at pool prefers herbal tea instead of coffee in the mornings",
@@ -134,16 +226,46 @@ const WhisperApp = () => {
     
     const transcription = mockTranscriptions[Math.floor(Math.random() * mockTranscriptions.length)];
 
+    await submitInsight(transcription);
+  };
+
+  const submitInsight = async (transcription) => {
+    const insightData = {
+      transcription,
+      userName,
+      timestamp: new Date().toISOString()
+    };
+
+    if (!isOnline) {
+      // Save to pending queue
+      setPendingQueue(prev => [...prev, insightData]);
+      
+      setLastInsight({
+        transcription: transcription,
+        detected: {
+          guestName: "Unknown",
+          roomNumber: null,
+          insightType: "Saved Offline",
+          suggestion: "Will sync when online"
+        }
+      });
+      setShowConfetti(true);
+      setError('📶 Offline - Insight saved locally. Will sync when connected.');
+
+      setTimeout(() => {
+        setShowConfetti(false);
+        setLastInsight(null);
+      }, 3000);
+      
+      return;
+    }
+
+    // Online - send immediately
     try {
-      // Send to API
       const response = await fetch('/api/submit-insight', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transcription,
-          userName,
-          timestamp: new Date().toISOString()
-        })
+        body: JSON.stringify(insightData)
       });
 
       const data = await response.json();
@@ -151,6 +273,7 @@ const WhisperApp = () => {
       if (data.success) {
         setLastInsight(data.insight);
         setShowConfetti(true);
+        setError(null);
 
         setTimeout(() => {
           setShowConfetti(false);
@@ -159,41 +282,34 @@ const WhisperApp = () => {
       }
     } catch (error) {
       console.error('Error submitting insight:', error);
-      setError('Failed to submit insight. Please try again.');
+      
+      // If fetch fails, might be offline - save to queue
+      setPendingQueue(prev => [...prev, insightData]);
+      setError('Failed to send. Saved locally - will retry when online.');
+      
+      setLastInsight({
+        transcription: transcription,
+        detected: {
+          guestName: "Unknown",
+          roomNumber: null,
+          insightType: "Saved Offline",
+          suggestion: "Will sync when online"
+        }
+      });
+      setShowConfetti(true);
+
+      setTimeout(() => {
+        setShowConfetti(false);
+        setLastInsight(null);
+      }, 3000);
     }
   };
 
   const handleTextSubmit = async () => {
     if (!textInput.trim()) return;
-
-    try {
-      // Send text input to API
-      const response = await fetch('/api/submit-insight', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transcription: textInput,
-          userName,
-          timestamp: new Date().toISOString()
-        })
-      });
-
-      const data = await response.json();
-      
-      if (data.success) {
-        setLastInsight(data.insight);
-        setShowConfetti(true);
-        setTextInput('');
-
-        setTimeout(() => {
-          setShowConfetti(false);
-          setLastInsight(null);
-        }, 3000);
-      }
-    } catch (error) {
-      console.error('Error submitting insight:', error);
-      setError('Failed to submit insight. Please try again.');
-    }
+    
+    await submitInsight(textInput);
+    setTextInput('');
   };
 
   return (
@@ -223,15 +339,55 @@ const WhisperApp = () => {
         </div>
       )}
 
-      {/* Header with Logo */}
+      {/* Header with Logo and Status */}
       <div className="bg-white border-b p-4">
         <div className="max-w-2xl mx-auto">
-          <div className="text-center mb-2">
-            <h1 className="text-2xl font-bold" style={{ color: '#00b3c2', fontFamily: 'cursive' }}>
-              Boardwalk
-            </h1>
-            <p className="text-xs text-gray-500">BOUTIQUE HOTEL ARUBA</p>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-center flex-1">
+              <h1 className="text-2xl font-bold" style={{ color: '#00b3c2', fontFamily: 'cursive' }}>
+                Boardwalk
+              </h1>
+              <p className="text-xs text-gray-500">BOUTIQUE HOTEL ARUBA</p>
+            </div>
+            
+            {/* Online/Offline Status */}
+            <div className="flex items-center space-x-2">
+              {isOnline ? (
+                <div className="flex items-center space-x-1 text-green-600">
+                  <Wifi className="w-4 h-4" />
+                  <span className="text-xs font-medium">Online</span>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-1 text-orange-600">
+                  <WifiOff className="w-4 h-4" />
+                  <span className="text-xs font-medium">Offline</span>
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* Pending Queue Indicator */}
+          {pendingQueue.length > 0 && (
+            <div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-2 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <CloudOff className="w-4 h-4 text-orange-600" />
+                <span className="text-xs text-orange-800">
+                  {pendingQueue.length} insight{pendingQueue.length > 1 ? 's' : ''} waiting to sync
+                </span>
+              </div>
+              {isOnline && !isSyncing && (
+                <button
+                  onClick={syncPendingInsights}
+                  className="text-xs bg-orange-600 text-white px-2 py-1 rounded hover:bg-orange-700"
+                >
+                  Sync Now
+                </button>
+              )}
+              {isSyncing && (
+                <span className="text-xs text-orange-600">Syncing...</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -382,9 +538,13 @@ const WhisperApp = () => {
           <span>Submit</span>
         </button>
 
-        {/* Error Message */}
+        {/* Error/Status Message */}
         {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg mt-4">
+          <div className={`mt-4 px-4 py-3 rounded-lg ${
+            error.includes('Offline') || error.includes('saved locally') 
+              ? 'bg-orange-100 border border-orange-400 text-orange-700' 
+              : 'bg-red-100 border border-red-400 text-red-700'
+          }`}>
             <p className="text-sm">{error}</p>
           </div>
         )}
