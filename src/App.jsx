@@ -345,7 +345,7 @@ const WhisperApp = () => {
           <div className="flex items-center justify-between mb-2">
             <div className="flex-1 flex justify-center">
   <img 
-    src="/Boardwalk_LogoStamp.png" 
+    src="/Boardwalk_Total.png" 
     alt="Boardwalk Boutique Hotel" 
     className="h-16 w-16"
   />
