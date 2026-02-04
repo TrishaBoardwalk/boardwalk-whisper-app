@@ -347,7 +347,7 @@ const WhisperApp = () => {
   <img 
     src="/Boardwalk_Total.png" 
     alt="Boardwalk Boutique Hotel" 
-    className="h-auto w-auto"
+    className="h-16 w-auto"
   />
 </div>
           
