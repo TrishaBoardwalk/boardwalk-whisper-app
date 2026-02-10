@@ -69,14 +69,16 @@ async function analyzeWithClaude(text) {
 
 Observation: "${text}"
 
+IMPORTANT: If the observation is unclear, incomplete, gibberish, or doesn't contain meaningful guest information, set the category to "Unclear" and type to "Unable to parse". Do NOT make up or invent guest preferences - only extract what is clearly stated.
+
 Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 {
   "guestName": "extracted guest name or 'Unknown'",
   "roomNumber": "room number if mentioned or null",
-  "category": "one of: Food and beverage, Housekeeping, Front office, General, Gifts, Previous stay, Reservations, Maintenance",
-  "type": "either 'Magic Moment' or 'Preference'",
+  "category": "one of: Food and beverage, Housekeeping, Front office, General, Gifts, Previous stay, Reservations, Maintenance, Unclear",
+  "type": "either 'Magic Moment' or 'Preference' or 'Unable to parse'",
   "priority": "urgent (for celebrations/special occasions), high (for strong preferences), or standard (general notes)",
-  "suggestion": "brief actionable suggestion (max 100 chars)"
+  "suggestion": "brief actionable suggestion (max 100 chars), or 'Recording unclear - please re-record' if uncertain"
 }
 
 Guidelines:
@@ -85,7 +87,9 @@ Guidelines:
 - Priority "urgent" only for time-sensitive celebrations happening during current stay
 - Be smart about extracting names (e.g., "John in room 305" → guestName: "John", roomNumber: "305")
 - If room mentioned without name, guestName can be "Guest in Room X"
-- Category should match the type of observation (food → Food and beverage, pillows → Housekeeping, etc.)`
+- Category should match the type of observation (food → Food and beverage, pillows → Housekeeping, etc.)
+- If the text is unclear, nonsensical, or contains no useful guest information, use category "Unclear" and type "Unable to parse"
+- NEVER invent or hallucinate preferences that aren't clearly stated in the observation`
         }]
       })
     });
