@@ -217,42 +217,43 @@ const WhisperApp = () => {
   };
 
   const processRecording = async (audioBlob) => {
-    // Mock transcription for demo
-   const processRecording = async (audioBlob) => {
-  try {
-    // Convert audio blob to base64
-    const reader = new FileReader();
-    reader.readAsDataURL(audioBlob);
-    
-    const base64Audio = await new Promise((resolve) => {
-      reader.onloadend = () => {
-        const base64 = reader.result.split(',')[1];
-        resolve(base64);
-      };
-    });
+    try {
+      setError('Transcribing audio...');
+      
+      // Convert audio blob to base64
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+      
+      const base64Audio = await new Promise((resolve) => {
+        reader.onloadend = () => {
+          const base64 = reader.result.split(',')[1];
+          resolve(base64);
+        };
+      });
 
-    // Send to transcription API
-    const response = await fetch('/api/transcribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        audio: base64Audio,
-        language: language === 'auto' ? null : language
-      })
-    });
+      // Send to transcription API
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audio: base64Audio,
+          language: language === 'auto' ? null : language
+        })
+      });
 
-    const data = await response.json();
-    
-    if (data.success && data.transcription) {
-      await submitInsight(data.transcription);
-    } else {
-      setError('Could not transcribe audio. Please try again.');
+      const data = await response.json();
+      
+      if (data.success && data.transcription) {
+        setError(null);
+        await submitInsight(data.transcription);
+      } else {
+        setError('Could not transcribe audio. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error processing recording:', error);
+      setError('Error processing recording. Please try again.');
     }
-  } catch (error) {
-    console.error('Error processing recording:', error);
-    setError('Error processing recording. Please try again.');
-  }
-};
+  };
 
   const submitInsight = async (transcription) => {
     const insightData = {
@@ -304,6 +305,8 @@ const WhisperApp = () => {
           setShowConfetti(false);
           setLastInsight(null);
         }, 3000);
+      } else if (data.error) {
+        setError(data.error);
       }
     } catch (error) {
       console.error('Error submitting insight:', error);
@@ -369,12 +372,12 @@ const WhisperApp = () => {
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-2">
             <div className="flex-1 flex justify-center">
-  <img 
-    src="/Boardwalk_Total.png" 
-    alt="Boardwalk Boutique Hotel" 
-    className="h-16 w-auto"
-  />
-</div>
+              <img 
+                src="/Boardwalk_Total.png" 
+                alt="Boardwalk Boutique Hotel" 
+                className="h-16 w-auto"
+              />
+            </div>
           
             {/* Online/Offline Status */}
             <div className="flex items-center space-x-2">
@@ -569,6 +572,8 @@ const WhisperApp = () => {
           <div className={`mt-4 px-4 py-3 rounded-lg ${
             error.includes('Offline') || error.includes('saved locally') 
               ? 'bg-orange-100 border border-orange-400 text-orange-700' 
+              : error.includes('Transcribing')
+              ? 'bg-blue-100 border border-blue-400 text-blue-700'
               : 'bg-red-100 border border-red-400 text-red-700'
           }`}>
             <p className="text-sm">{error}</p>
