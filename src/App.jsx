@@ -218,16 +218,41 @@ const WhisperApp = () => {
 
   const processRecording = async (audioBlob) => {
     // Mock transcription for demo
-    const mockTranscriptions = [
-      "Guest in room 305 mentioned they are celebrating their anniversary tomorrow",
-      "Guest at pool prefers herbal tea instead of coffee in the mornings",
-      "Guest mentioned interest in local bird watching"
-    ];
+   const processRecording = async (audioBlob) => {
+  try {
+    // Convert audio blob to base64
+    const reader = new FileReader();
+    reader.readAsDataURL(audioBlob);
     
-    const transcription = mockTranscriptions[Math.floor(Math.random() * mockTranscriptions.length)];
+    const base64Audio = await new Promise((resolve) => {
+      reader.onloadend = () => {
+        const base64 = reader.result.split(',')[1];
+        resolve(base64);
+      };
+    });
 
-    await submitInsight(transcription);
-  };
+    // Send to transcription API
+    const response = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        audio: base64Audio,
+        language: language === 'auto' ? null : language
+      })
+    });
+
+    const data = await response.json();
+    
+    if (data.success && data.transcription) {
+      await submitInsight(data.transcription);
+    } else {
+      setError('Could not transcribe audio. Please try again.');
+    }
+  } catch (error) {
+    console.error('Error processing recording:', error);
+    setError('Error processing recording. Please try again.');
+  }
+};
 
   const submitInsight = async (transcription) => {
     const insightData = {
