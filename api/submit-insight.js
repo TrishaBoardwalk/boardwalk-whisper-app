@@ -9,13 +9,47 @@ export default async function handler(req, res) {
     const body = req.body;
     const { transcription, userName, timestamp } = body;
 
+    // Validate transcription before processing
+    const cleanTranscription = transcription?.trim() || '';
+    
+    // Check if transcription is too short or meaningless
+    if (cleanTranscription.length < 10) {
+      return res.status(400).json({ 
+        error: 'Recording too short or unclear. Please try again and speak clearly.',
+        success: false
+      });
+    }
+
+    // Check for common gibberish patterns or meaningless phrases
+    const gibberishPatterns = [
+      /^[^a-zA-Z]*$/,  // No letters at all
+      /^[\s\.\,\!\?]*$/, // Only punctuation and spaces
+      /^(uh+|um+|ah+|hm+|mm+)[\s\.\,]*$/i, // Just filler words
+    ];
+
+    if (gibberishPatterns.some(pattern => pattern.test(cleanTranscription))) {
+      return res.status(400).json({ 
+        error: 'Recording unclear or no speech detected. Please try again.',
+        success: false
+      });
+    }
+
     // Use Claude AI for intelligent detection
-    const aiDetection = await analyzeWithClaude(transcription);
+    const aiDetection = await analyzeWithClaude(cleanTranscription);
+
+    // Check if AI detected unclear content
+    if (aiDetection.category === 'Unclear' || aiDetection.type === 'Unable to parse') {
+      return res.status(400).json({ 
+        error: 'Could not understand the recording. Please speak more clearly and try again.',
+        success: false,
+        transcription: cleanTranscription
+      });
+    }
 
     // Create insight object
     const insight = {
       id: Date.now().toString(),
-      transcription,
+      transcription: cleanTranscription,
       recordedBy: userName,
       timestamp: timestamp || new Date().toISOString(),
       aiSuggestion: aiDetection.suggestion,
@@ -69,7 +103,7 @@ async function analyzeWithClaude(text) {
 
 Observation: "${text}"
 
-IMPORTANT: If the observation is unclear, incomplete, gibberish, or doesn't contain meaningful guest information, set the category to "Unclear" and type to "Unable to parse". Do NOT make up or invent guest preferences - only extract what is clearly stated.
+CRITICAL: If the observation is unclear, incomplete, gibberish, meaningless, or doesn't contain ANY useful guest information, you MUST set category to "Unclear" and type to "Unable to parse". Do NOT make up, invent, or hallucinate guest preferences. Only extract information that is CLEARLY and EXPLICITLY stated in the observation.
 
 Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 {
@@ -88,8 +122,9 @@ Guidelines:
 - Be smart about extracting names (e.g., "John in room 305" → guestName: "John", roomNumber: "305")
 - If room mentioned without name, guestName can be "Guest in Room X"
 - Category should match the type of observation (food → Food and beverage, pillows → Housekeeping, etc.)
-- If the text is unclear, nonsensical, or contains no useful guest information, use category "Unclear" and type "Unable to parse"
-- NEVER invent or hallucinate preferences that aren't clearly stated in the observation`
+- If the text is unclear, nonsensical, too vague, or contains no useful guest information, you MUST use category "Unclear" and type "Unable to parse"
+- NEVER invent or hallucinate preferences that aren't clearly stated in the observation
+- If you're not confident about what was said, mark it as "Unclear" rather than guessing`
         }]
       })
     });
@@ -123,6 +158,18 @@ Guidelines:
 function fallbackAnalysis(text) {
   // Simple fallback in case Claude API is unavailable
   const lowerText = text.toLowerCase();
+  
+  // Check if text seems meaningless
+  if (text.length < 10 || lowerText.split(' ').length < 3) {
+    return {
+      guestName: 'Unknown',
+      roomNumber: null,
+      category: 'Unclear',
+      type: 'Unable to parse',
+      priority: 'standard',
+      suggestion: 'Recording unclear - please re-record'
+    };
+  }
   
   const roomMatch = text.match(/room\s+(\d+)/i);
   const roomNumber = roomMatch ? roomMatch[1] : null;
