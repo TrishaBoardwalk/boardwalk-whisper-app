@@ -1,6 +1,3 @@
-import fetch from 'node-fetch';
-import FormData from 'form-data';
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -20,16 +17,41 @@ export default async function handler(req, res) {
     // Convert base64 to buffer
     const audioBuffer = Buffer.from(audio, 'base64');
 
-    // Create FormData
-    const formData = new FormData();
-    formData.append('file', audioBuffer, {
-      filename: 'recording.webm',
-      contentType: 'audio/webm'
-    });
-    formData.append('model', 'whisper-1');
+    // Create multipart form data manually
+    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
     
+    const formDataParts = [];
+    
+    // Add file field
+    formDataParts.push(`--${boundary}\r\n`);
+    formDataParts.push(`Content-Disposition: form-data; name="file"; filename="recording.webm"\r\n`);
+    formDataParts.push(`Content-Type: audio/webm\r\n\r\n`);
+    
+    // Add model field
+    const fileAndModel = Buffer.concat([
+      audioBuffer,
+      Buffer.from(`\r\n--${boundary}\r\n`),
+      Buffer.from(`Content-Disposition: form-data; name="model"\r\n\r\n`),
+      Buffer.from(`whisper-1\r\n`)
+    ]);
+    
+    // Add language if specified
+    let finalBuffer;
     if (language && language !== 'auto' && language !== null) {
-      formData.append('language', language);
+      finalBuffer = Buffer.concat([
+        Buffer.from(formDataParts.join('')),
+        fileAndModel,
+        Buffer.from(`--${boundary}\r\n`),
+        Buffer.from(`Content-Disposition: form-data; name="language"\r\n\r\n`),
+        Buffer.from(`${language}\r\n`),
+        Buffer.from(`--${boundary}--\r\n`)
+      ]);
+    } else {
+      finalBuffer = Buffer.concat([
+        Buffer.from(formDataParts.join('')),
+        fileAndModel,
+        Buffer.from(`--${boundary}--\r\n`)
+      ]);
     }
 
     // Call OpenAI Whisper API
@@ -37,17 +59,18 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        ...formData.getHeaders()
+        'Content-Type': `multipart/form-data; boundary=${boundary}`
       },
-      body: formData
+      body: finalBuffer
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('OpenAI API error:', errorText);
-      return res.status(response.status).json({ 
+      console.error('OpenAI API error:', response.status, errorText);
+      return res.status(500).json({ 
         error: 'Transcription service error', 
-        success: false 
+        success: false,
+        details: errorText
       });
     }
 
