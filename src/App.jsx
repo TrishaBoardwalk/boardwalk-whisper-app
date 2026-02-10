@@ -20,7 +20,8 @@ const WhisperApp = () => {
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
   const timerRef = useRef(null);
-  const audioChunksRef = useRef([]);
+  const recognitionRef = useRef(null);
+  const transcriptRef = useRef('');
 
   // Load saved name and pending queue on mount
   useEffect(() => {
@@ -38,6 +39,54 @@ const WhisperApp = () => {
       } catch (e) {
         console.error('Error loading pending queue:', e);
       }
+    }
+
+    // Initialize speech recognition
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
+      
+      recognitionRef.current.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+
+        transcriptRef.current = (finalTranscript + interimTranscript).trim();
+      };
+
+      recognitionRef.current.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'no-speech') {
+          setError('No speech detected. Please try again.');
+        } else if (event.error === 'audio-capture') {
+          setError('Microphone error. Please check your microphone.');
+        } else if (event.error === 'not-allowed') {
+          setError('Microphone access denied. Please allow microphone access.');
+        } else {
+          setError('Speech recognition error. Please try again.');
+        }
+      };
+
+      recognitionRef.current.onend = () => {
+        if (isRecording) {
+          // Restart if still recording
+          try {
+            recognitionRef.current.start();
+          } catch (e) {
+            console.error('Error restarting recognition:', e);
+          }
+        }
+      };
     }
   }, []);
 
@@ -88,6 +137,15 @@ const WhisperApp = () => {
     }
     return () => clearInterval(timerRef.current);
   }, [isRecording]);
+
+  // Set speech recognition language
+  useEffect(() => {
+    if (recognitionRef.current && language !== 'auto') {
+      recognitionRef.current.lang = language;
+    } else if (recognitionRef.current) {
+      recognitionRef.current.lang = 'en-US';
+    }
+  }, [language]);
 
   const syncPendingInsights = async () => {
     if (pendingQueue.length === 0 || isSyncing) return;
@@ -144,6 +202,14 @@ const WhisperApp = () => {
   const startRecording = async () => {
     try {
       setError(null);
+      transcriptRef.current = '';
+
+      // Check if speech recognition is available
+      if (!recognitionRef.current) {
+        setError('Speech recognition not supported in this browser. Please use Chrome or Safari.');
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
       // Setup audio visualization
@@ -159,43 +225,62 @@ const WhisperApp = () => {
       // Start visualization
       visualize();
 
-      // Setup MediaRecorder
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        await processRecording(audioBlob);
-        
-        // Cleanup
+      // Start speech recognition
+      try {
+        recognitionRef.current.start();
+        setIsRecording(true);
+      } catch (e) {
+        console.error('Error starting recognition:', e);
+        setError('Could not start speech recognition. Please try again.');
         stream.getTracks().forEach(track => track.stop());
-        if (audioContextRef.current) {
-          audioContextRef.current.close();
-        }
-        cancelAnimationFrame(animationFrameRef.current);
-      };
+        if (audioContext) audioContext.close();
+        return;
+      }
 
-      mediaRecorder.start();
-      setIsRecording(true);
+      // Keep stream reference for cleanup
+      mediaRecorderRef.current = { stream };
+
     } catch (err) {
       console.error('Error accessing microphone:', err);
       setError('Could not access microphone. Please check permissions.');
     }
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      setAudioLevel(0);
+  const stopRecording = async () => {
+    if (!isRecording) return;
+
+    setIsRecording(false);
+    setAudioLevel(0);
+
+    // Stop speech recognition
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.error('Error stopping recognition:', e);
+      }
     }
+
+    // Cleanup audio context
+    if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+    }
+    
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+    }
+    
+    cancelAnimationFrame(animationFrameRef.current);
+
+    // Process the transcription
+    setTimeout(() => {
+      const transcription = transcriptRef.current.trim();
+      if (transcription) {
+        submitInsight(transcription);
+      } else {
+        setError('No speech detected. Please try again and speak clearly.');
+      }
+    }, 500);
   };
 
   const visualize = () => {
@@ -214,45 +299,6 @@ const WhisperApp = () => {
     };
     
     draw();
-  };
-
-  const processRecording = async (audioBlob) => {
-    try {
-      setError('Transcribing audio...');
-      
-      // Convert audio blob to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(audioBlob);
-      
-      const base64Audio = await new Promise((resolve) => {
-        reader.onloadend = () => {
-          const base64 = reader.result.split(',')[1];
-          resolve(base64);
-        };
-      });
-
-      // Send to transcription API
-      const response = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          audio: base64Audio,
-          language: language === 'auto' ? null : language
-        })
-      });
-
-      const data = await response.json();
-      
-      if (data.success && data.transcription) {
-        setError(null);
-        await submitInsight(data.transcription);
-      } else {
-        setError('Could not transcribe audio. Please try again.');
-      }
-    } catch (error) {
-      console.error('Error processing recording:', error);
-      setError('Error processing recording. Please try again.');
-    }
   };
 
   const submitInsight = async (transcription) => {
@@ -489,10 +535,10 @@ const WhisperApp = () => {
               className="flex-1 text-lg border-none outline-none bg-transparent cursor-pointer"
             >
               <option value="auto">Auto-detect language</option>
-              <option value="en">English</option>
-              <option value="es">Spanish</option>
-              <option value="nl">Dutch</option>
-              <option value="pt">Portuguese</option>
+              <option value="en-US">English</option>
+              <option value="es-ES">Spanish</option>
+              <option value="nl-NL">Dutch</option>
+              <option value="pt-PT">Portuguese</option>
             </select>
           </div>
         </div>
@@ -572,8 +618,6 @@ const WhisperApp = () => {
           <div className={`mt-4 px-4 py-3 rounded-lg ${
             error.includes('Offline') || error.includes('saved locally') 
               ? 'bg-orange-100 border border-orange-400 text-orange-700' 
-              : error.includes('Transcribing')
-              ? 'bg-blue-100 border border-blue-400 text-blue-700'
               : 'bg-red-100 border border-red-400 text-red-700'
           }`}>
             <p className="text-sm">{error}</p>
