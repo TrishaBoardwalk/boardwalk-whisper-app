@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Sparkles, Send, Globe, WifiOff, Wifi, Cloud, CloudOff } from 'lucide-react';
+import { Mic, MicOff, Sparkles, Send, Globe, WifiOff, Wifi, Cloud, CloudOff, Volume2, VolumeX } from 'lucide-react';
 
 const WhisperApp = () => {
   const [userName, setUserName] = useState('');
@@ -14,6 +14,8 @@ const WhisperApp = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingQueue, setPendingQueue] = useState([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [voiceActivationEnabled, setVoiceActivationEnabled] = useState(false);
+  const [isListeningForWakeWord, setIsListeningForWakeWord] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -21,7 +23,31 @@ const WhisperApp = () => {
   const animationFrameRef = useRef(null);
   const timerRef = useRef(null);
   const recognitionRef = useRef(null);
+  const wakeWordRecognitionRef = useRef(null);
   const transcriptRef = useRef('');
+
+  // Audio feedback
+  const playBeep = (frequency = 800, duration = 200) => {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'sine';
+      
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration / 1000);
+      
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + duration / 1000);
+    } catch (e) {
+      console.error('Error playing beep:', e);
+    }
+  };
 
   // Load saved name and pending queue on mount
   useEffect(() => {
@@ -30,7 +56,6 @@ const WhisperApp = () => {
       setUserName(savedName);
     }
 
-    // Load pending queue from localStorage
     const savedQueue = localStorage.getItem('whisperPendingQueue');
     if (savedQueue) {
       try {
@@ -41,9 +66,17 @@ const WhisperApp = () => {
       }
     }
 
-    // Initialize speech recognition
+    // Load voice activation preference
+    const savedVoiceActivation = localStorage.getItem('voiceActivationEnabled');
+    if (savedVoiceActivation === 'true') {
+      setVoiceActivationEnabled(true);
+    }
+
+    // Initialize speech recognition for recording
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      
+      // Main recognition for actual recording
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
@@ -61,7 +94,15 @@ const WhisperApp = () => {
           }
         }
 
-        transcriptRef.current = (finalTranscript + interimTranscript).trim();
+        const fullTranscript = (finalTranscript + interimTranscript).trim();
+        transcriptRef.current = fullTranscript;
+
+        // Check for stop command
+        if (fullTranscript.toLowerCase().includes('stop recording') || 
+            fullTranscript.toLowerCase().includes('submit') ||
+            fullTranscript.toLowerCase().includes('stop')) {
+          stopRecording();
+        }
       };
 
       recognitionRef.current.onerror = (event) => {
@@ -72,14 +113,11 @@ const WhisperApp = () => {
           setError('Microphone error. Please check your microphone.');
         } else if (event.error === 'not-allowed') {
           setError('Microphone access denied. Please allow microphone access.');
-        } else {
-          setError('Speech recognition error. Please try again.');
         }
       };
 
       recognitionRef.current.onend = () => {
         if (isRecording) {
-          // Restart if still recording
           try {
             recognitionRef.current.start();
           } catch (e) {
@@ -87,6 +125,42 @@ const WhisperApp = () => {
           }
         }
       };
+
+      // Wake word recognition (separate instance)
+      wakeWordRecognitionRef.current = new SpeechRecognition();
+      wakeWordRecognitionRef.current.continuous = true;
+      wakeWordRecognitionRef.current.interimResults = false;
+      
+      wakeWordRecognitionRef.current.onresult = (event) => {
+        const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
+        
+        // Check for wake words
+        if (transcript.includes('record insight') || 
+            transcript.includes('magic moment') ||
+            transcript.includes('record guest')) {
+          console.log('Wake word detected:', transcript);
+          playBeep(1000, 150); // High beep
+          startRecording();
+        }
+      };
+
+      wakeWordRecognitionRef.current.onerror = (event) => {
+        if (event.error !== 'no-speech') {
+          console.error('Wake word recognition error:', event.error);
+        }
+      };
+
+      wakeWordRecognitionRef.current.onend = () => {
+        if (voiceActivationEnabled && !isRecording) {
+          try {
+            wakeWordRecognitionRef.current.start();
+          } catch (e) {
+            console.error('Error restarting wake word recognition:', e);
+          }
+        }
+      };
+    } else {
+      setError('Speech recognition not supported in this browser. Please use Chrome or Safari.');
     }
   }, []);
 
@@ -101,7 +175,6 @@ const WhisperApp = () => {
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      // Auto-sync when coming back online
       if (pendingQueue.length > 0) {
         syncPendingInsights();
       }
@@ -145,7 +218,46 @@ const WhisperApp = () => {
     } else if (recognitionRef.current) {
       recognitionRef.current.lang = 'en-US';
     }
+
+    if (wakeWordRecognitionRef.current) {
+      wakeWordRecognitionRef.current.lang = 'en-US'; // Wake words always in English
+    }
   }, [language]);
+
+  // Voice activation control
+  useEffect(() => {
+    localStorage.setItem('voiceActivationEnabled', voiceActivationEnabled.toString());
+
+    if (voiceActivationEnabled && wakeWordRecognitionRef.current && !isRecording) {
+      try {
+        wakeWordRecognitionRef.current.start();
+        setIsListeningForWakeWord(true);
+        playBeep(600, 100); // Low beep for activation
+      } catch (e) {
+        if (e.name !== 'InvalidStateError') {
+          console.error('Error starting wake word recognition:', e);
+        }
+      }
+    } else if (!voiceActivationEnabled && wakeWordRecognitionRef.current) {
+      try {
+        wakeWordRecognitionRef.current.stop();
+        setIsListeningForWakeWord(false);
+        playBeep(400, 100); // Lower beep for deactivation
+      } catch (e) {
+        console.error('Error stopping wake word recognition:', e);
+      }
+    }
+
+    return () => {
+      if (wakeWordRecognitionRef.current) {
+        try {
+          wakeWordRecognitionRef.current.stop();
+        } catch (e) {
+          // Ignore errors on cleanup
+        }
+      }
+    };
+  }, [voiceActivationEnabled, isRecording]);
 
   const syncPendingInsights = async () => {
     if (pendingQueue.length === 0 || isSyncing) return;
@@ -174,13 +286,12 @@ const WhisperApp = () => {
       }
     }
 
-    // Update queue with only failed insights
     setPendingQueue(failedInsights);
     setIsSyncing(false);
 
     if (failedInsights.length === 0) {
       setError(null);
-      showSuccessMessage('All insights synced successfully! ✅');
+      showSuccessMessage('All insights synced successfully!');
     } else {
       setError(`${failedInsights.length} insights failed to sync. Will retry when online.`);
     }
@@ -204,15 +315,23 @@ const WhisperApp = () => {
       setError(null);
       transcriptRef.current = '';
 
-      // Check if speech recognition is available
       if (!recognitionRef.current) {
-        setError('Speech recognition not supported in this browser. Please use Chrome or Safari.');
+        setError('Speech recognition not supported in this browser.');
         return;
+      }
+
+      // Stop wake word listening while recording
+      if (wakeWordRecognitionRef.current && voiceActivationEnabled) {
+        try {
+          wakeWordRecognitionRef.current.stop();
+          setIsListeningForWakeWord(false);
+        } catch (e) {
+          console.error('Error stopping wake word recognition:', e);
+        }
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
-      // Setup audio visualization
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const analyser = audioContext.createAnalyser();
       const source = audioContext.createMediaStreamSource(stream);
@@ -222,13 +341,12 @@ const WhisperApp = () => {
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
       
-      // Start visualization
       visualize();
 
-      // Start speech recognition
       try {
         recognitionRef.current.start();
         setIsRecording(true);
+        playBeep(1000, 100); // Start recording beep
       } catch (e) {
         console.error('Error starting recognition:', e);
         setError('Could not start speech recognition. Please try again.');
@@ -237,7 +355,6 @@ const WhisperApp = () => {
         return;
       }
 
-      // Keep stream reference for cleanup
       mediaRecorderRef.current = { stream };
 
     } catch (err) {
@@ -252,7 +369,6 @@ const WhisperApp = () => {
     setIsRecording(false);
     setAudioLevel(0);
 
-    // Stop speech recognition
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -261,7 +377,6 @@ const WhisperApp = () => {
       }
     }
 
-    // Cleanup audio context
     if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
     }
@@ -272,11 +387,32 @@ const WhisperApp = () => {
     
     cancelAnimationFrame(animationFrameRef.current);
 
-    // Process the transcription
+    playBeep(800, 100); // Stop recording beep
+
+    // Restart wake word listening if enabled
+    if (voiceActivationEnabled && wakeWordRecognitionRef.current) {
+      setTimeout(() => {
+        try {
+          wakeWordRecognitionRef.current.start();
+          setIsListeningForWakeWord(true);
+        } catch (e) {
+          console.error('Error restarting wake word recognition:', e);
+        }
+      }, 500);
+    }
+
     setTimeout(() => {
       const transcription = transcriptRef.current.trim();
-      if (transcription) {
-        submitInsight(transcription);
+      
+      // Remove stop commands from transcript
+      const cleanedTranscription = transcription
+        .replace(/stop recording/gi, '')
+        .replace(/\bsubmit\b/gi, '')
+        .replace(/\bstop\b$/gi, '')
+        .trim();
+
+      if (cleanedTranscription) {
+        submitInsight(cleanedTranscription);
       } else {
         setError('No speech detected. Please try again and speak clearly.');
       }
@@ -293,7 +429,6 @@ const WhisperApp = () => {
       animationFrameRef.current = requestAnimationFrame(draw);
       analyserRef.current.getByteFrequencyData(dataArray);
       
-      // Calculate average audio level
       const average = dataArray.reduce((a, b) => a + b) / bufferLength;
       setAudioLevel(Math.min(100, (average / 255) * 200));
     };
@@ -309,7 +444,6 @@ const WhisperApp = () => {
     };
 
     if (!isOnline) {
-      // Save to pending queue
       setPendingQueue(prev => [...prev, insightData]);
       
       setLastInsight({
@@ -322,7 +456,7 @@ const WhisperApp = () => {
         }
       });
       setShowConfetti(true);
-      setError('📶 Offline - Insight saved locally. Will sync when connected.');
+      setError('Offline - Insight saved locally. Will sync when connected.');
 
       setTimeout(() => {
         setShowConfetti(false);
@@ -332,7 +466,6 @@ const WhisperApp = () => {
       return;
     }
 
-    // Online - send immediately
     try {
       const response = await fetch('/api/submit-insight', {
         method: 'POST',
@@ -346,6 +479,7 @@ const WhisperApp = () => {
         setLastInsight(data.insight);
         setShowConfetti(true);
         setError(null);
+        playBeep(1200, 200); // Success beep
 
         setTimeout(() => {
           setShowConfetti(false);
@@ -357,7 +491,6 @@ const WhisperApp = () => {
     } catch (error) {
       console.error('Error submitting insight:', error);
       
-      // If fetch fails, might be offline - save to queue
       setPendingQueue(prev => [...prev, insightData]);
       setError('Failed to send. Saved locally - will retry when online.');
       
@@ -468,6 +601,54 @@ const WhisperApp = () => {
 
       {/* Main Content */}
       <div className="max-w-2xl mx-auto px-4 py-8">
+        {/* Voice Activation Toggle */}
+        <div className="bg-white rounded-xl shadow-sm p-4 mb-4 border-2 border-blue-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              {voiceActivationEnabled ? (
+                <Volume2 className="w-6 h-6 text-blue-600" />
+              ) : (
+                <VolumeX className="w-6 h-6 text-gray-400" />
+              )}
+              <div>
+                <p className="font-semibold text-gray-900">Voice Activation</p>
+                <p className="text-xs text-gray-600">
+                  {voiceActivationEnabled 
+                    ? isListeningForWakeWord 
+                      ? 'Listening for "Record insight"...'
+                      : 'Starting...'
+                    : 'Say "Record insight" to start'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setVoiceActivationEnabled(!voiceActivationEnabled)}
+              className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
+                voiceActivationEnabled ? 'bg-blue-600' : 'bg-gray-300'
+              }`}
+            >
+              <span
+                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                  voiceActivationEnabled ? 'translate-x-7' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+          {voiceActivationEnabled && (
+            <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+              <p className="text-xs text-blue-800 font-medium mb-1">Wake Words:</p>
+              <p className="text-xs text-blue-700">
+                • "Record insight"<br />
+                • "Magic moment"<br />
+                • "Record guest"
+              </p>
+              <p className="text-xs text-blue-600 mt-2">
+                To stop: Say "Stop recording" or "Submit"
+              </p>
+            </div>
+          )}
+        </div>
+
         {/* Success Message */}
         {lastInsight && (
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6" style={{ animation: 'slideUp 0.5s ease-out' }}>
@@ -504,7 +685,11 @@ const WhisperApp = () => {
         {/* Title */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-serif font-bold text-gray-900 mb-2">Record Guest Insight</h1>
-          <p className="text-gray-600">Record name or room number of guest and guest information</p>
+          <p className="text-gray-600">
+            {voiceActivationEnabled 
+              ? 'Just say "Record insight" to start'
+              : 'Record name or room number of guest and guest information'}
+          </p>
         </div>
 
         {/* Name Input */}
@@ -562,16 +747,17 @@ const WhisperApp = () => {
               <div className="text-2xl font-bold text-gray-800 mb-2">
                 {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
               </div>
+              <p className="text-sm text-gray-600">Say "Stop recording" to finish</p>
             </div>
           )}
 
           <button
             onClick={isRecording ? stopRecording : startRecording}
-            disabled={showConfetti}
+            disabled={showConfetti || (voiceActivationEnabled && !isRecording)}
             style={{ backgroundColor: isRecording ? '#ef4444' : '#00b3c2' }}
             className={`w-32 h-32 rounded-full flex items-center justify-center shadow-xl transition-all transform mx-auto hover:opacity-90 ${
               isRecording ? 'scale-110 animate-pulse' : 'hover:scale-105'
-            } ${showConfetti ? 'opacity-50 cursor-not-allowed' : ''}`}
+            } ${(showConfetti || (voiceActivationEnabled && !isRecording)) ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             {isRecording ? (
               <MicOff className="w-12 h-12 text-white" />
@@ -581,7 +767,11 @@ const WhisperApp = () => {
           </button>
 
           <p className="text-gray-600 mt-4 font-medium">
-            {isRecording ? 'Tap to stop recording' : 'Tap to start recording'}
+            {voiceActivationEnabled && !isRecording 
+              ? 'Voice activation enabled - just speak!'
+              : isRecording 
+                ? 'Tap to stop recording or say "Stop"' 
+                : 'Tap to start recording'}
           </p>
         </div>
 
