@@ -16,6 +16,8 @@ const WhisperApp = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [voiceActivationEnabled, setVoiceActivationEnabled] = useState(false);
   const [isListeningForWakeWord, setIsListeningForWakeWord] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
 
   const mediaRecorderRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -66,41 +68,55 @@ const WhisperApp = () => {
       }
     }
 
-    // Load voice activation preference
     const savedVoiceActivation = localStorage.getItem('voiceActivationEnabled');
     if (savedVoiceActivation === 'true') {
       setVoiceActivationEnabled(true);
     }
 
-    // Initialize speech recognition for recording
+    // Initialize speech recognition
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       
-      // Main recognition for actual recording
+      // Main recognition for actual recording - IMPROVED SETTINGS
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
+      recognitionRef.current.maxAlternatives = 3; // Get multiple alternatives for better accuracy
       
       recognitionRef.current.onresult = (event) => {
-        let interimTranscript = '';
-        let finalTranscript = '';
+        let interimText = '';
+        let finalText = '';
 
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
+          const result = event.results[i];
+          const transcript = result[0].transcript;
+          
+          // Use confidence threshold - only accept high confidence results
+          const confidence = result[0].confidence;
+          console.log('Confidence:', confidence, 'Text:', transcript);
+          
+          if (result.isFinal) {
+            // Only add if confidence is decent (above 0.5)
+            if (confidence > 0.5 || confidence === undefined) {
+              finalText += transcript + ' ';
+            }
           } else {
-            interimTranscript += transcript;
+            interimText += transcript;
           }
         }
 
-        const fullTranscript = (finalTranscript + interimTranscript).trim();
-        transcriptRef.current = fullTranscript;
+        const fullTranscript = (finalText + interimText).trim();
+        transcriptRef.current = finalText.trim(); // Only store final text
+        
+        // Update live display
+        setLiveTranscript(finalText.trim());
+        setInterimTranscript(interimText.trim());
 
         // Check for stop command
-        if (fullTranscript.toLowerCase().includes('stop recording') || 
-            fullTranscript.toLowerCase().includes('submit') ||
-            fullTranscript.toLowerCase().includes('stop')) {
+        const lowerText = fullTranscript.toLowerCase();
+        if (lowerText.includes('stop recording') || 
+            lowerText.includes('submit') ||
+            lowerText.endsWith('stop')) {
           stopRecording();
         }
       };
@@ -108,11 +124,14 @@ const WhisperApp = () => {
       recognitionRef.current.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
         if (event.error === 'no-speech') {
-          setError('No speech detected. Please try again.');
+          // Don't show error for no-speech, just keep listening
+          console.log('No speech detected, continuing...');
         } else if (event.error === 'audio-capture') {
           setError('Microphone error. Please check your microphone.');
         } else if (event.error === 'not-allowed') {
           setError('Microphone access denied. Please allow microphone access.');
+        } else if (event.error === 'network') {
+          setError('Network error. Speech recognition requires internet connection.');
         }
       };
 
@@ -126,7 +145,7 @@ const WhisperApp = () => {
         }
       };
 
-      // Wake word recognition (separate instance)
+      // Wake word recognition
       wakeWordRecognitionRef.current = new SpeechRecognition();
       wakeWordRecognitionRef.current.continuous = true;
       wakeWordRecognitionRef.current.interimResults = false;
@@ -134,12 +153,11 @@ const WhisperApp = () => {
       wakeWordRecognitionRef.current.onresult = (event) => {
         const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
         
-        // Check for wake words
         if (transcript.includes('record insight') || 
             transcript.includes('magic moment') ||
             transcript.includes('record guest')) {
           console.log('Wake word detected:', transcript);
-          playBeep(1000, 150); // High beep
+          playBeep(1000, 150);
           startRecording();
         }
       };
@@ -164,14 +182,12 @@ const WhisperApp = () => {
     }
   }, []);
 
-  // Save name when it changes
   useEffect(() => {
     if (userName.trim()) {
       localStorage.setItem('whisperUserName', userName.trim());
     }
   }, [userName]);
 
-  // Monitor online/offline status
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
@@ -193,12 +209,10 @@ const WhisperApp = () => {
     };
   }, [pendingQueue]);
 
-  // Save pending queue to localStorage whenever it changes
   useEffect(() => {
     localStorage.setItem('whisperPendingQueue', JSON.stringify(pendingQueue));
   }, [pendingQueue]);
 
-  // Recording timer
   useEffect(() => {
     if (isRecording) {
       timerRef.current = setInterval(() => {
@@ -211,7 +225,6 @@ const WhisperApp = () => {
     return () => clearInterval(timerRef.current);
   }, [isRecording]);
 
-  // Set speech recognition language
   useEffect(() => {
     if (recognitionRef.current && language !== 'auto') {
       recognitionRef.current.lang = language;
@@ -220,11 +233,10 @@ const WhisperApp = () => {
     }
 
     if (wakeWordRecognitionRef.current) {
-      wakeWordRecognitionRef.current.lang = 'en-US'; // Wake words always in English
+      wakeWordRecognitionRef.current.lang = 'en-US';
     }
   }, [language]);
 
-  // Voice activation control
   useEffect(() => {
     localStorage.setItem('voiceActivationEnabled', voiceActivationEnabled.toString());
 
@@ -232,7 +244,7 @@ const WhisperApp = () => {
       try {
         wakeWordRecognitionRef.current.start();
         setIsListeningForWakeWord(true);
-        playBeep(600, 100); // Low beep for activation
+        playBeep(600, 100);
       } catch (e) {
         if (e.name !== 'InvalidStateError') {
           console.error('Error starting wake word recognition:', e);
@@ -242,7 +254,7 @@ const WhisperApp = () => {
       try {
         wakeWordRecognitionRef.current.stop();
         setIsListeningForWakeWord(false);
-        playBeep(400, 100); // Lower beep for deactivation
+        playBeep(400, 100);
       } catch (e) {
         console.error('Error stopping wake word recognition:', e);
       }
@@ -253,7 +265,7 @@ const WhisperApp = () => {
         try {
           wakeWordRecognitionRef.current.stop();
         } catch (e) {
-          // Ignore errors on cleanup
+          // Ignore
         }
       }
     };
@@ -314,13 +326,14 @@ const WhisperApp = () => {
     try {
       setError(null);
       transcriptRef.current = '';
+      setLiveTranscript('');
+      setInterimTranscript('');
 
       if (!recognitionRef.current) {
         setError('Speech recognition not supported in this browser.');
         return;
       }
 
-      // Stop wake word listening while recording
       if (wakeWordRecognitionRef.current && voiceActivationEnabled) {
         try {
           wakeWordRecognitionRef.current.stop();
@@ -330,7 +343,14 @@ const WhisperApp = () => {
         }
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000 // Higher sample rate for better quality
+        }
+      });
       
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const analyser = audioContext.createAnalyser();
@@ -346,7 +366,7 @@ const WhisperApp = () => {
       try {
         recognitionRef.current.start();
         setIsRecording(true);
-        playBeep(1000, 100); // Start recording beep
+        playBeep(1000, 100);
       } catch (e) {
         console.error('Error starting recognition:', e);
         setError('Could not start speech recognition. Please try again.');
@@ -387,9 +407,8 @@ const WhisperApp = () => {
     
     cancelAnimationFrame(animationFrameRef.current);
 
-    playBeep(800, 100); // Stop recording beep
+    playBeep(800, 100);
 
-    // Restart wake word listening if enabled
     if (voiceActivationEnabled && wakeWordRecognitionRef.current) {
       setTimeout(() => {
         try {
@@ -404,7 +423,6 @@ const WhisperApp = () => {
     setTimeout(() => {
       const transcription = transcriptRef.current.trim();
       
-      // Remove stop commands from transcript
       const cleanedTranscription = transcription
         .replace(/stop recording/gi, '')
         .replace(/\bsubmit\b/gi, '')
@@ -416,6 +434,10 @@ const WhisperApp = () => {
       } else {
         setError('No speech detected. Please try again and speak clearly.');
       }
+      
+      // Clear live transcript
+      setLiveTranscript('');
+      setInterimTranscript('');
     }, 500);
   };
 
@@ -479,7 +501,7 @@ const WhisperApp = () => {
         setLastInsight(data.insight);
         setShowConfetti(true);
         setError(null);
-        playBeep(1200, 200); // Success beep
+        playBeep(1200, 200);
 
         setTimeout(() => {
           setShowConfetti(false);
@@ -546,7 +568,7 @@ const WhisperApp = () => {
         </div>
       )}
 
-      {/* Header with Logo and Status */}
+      {/* Header */}
       <div className="bg-white border-b p-4">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-2">
@@ -558,7 +580,6 @@ const WhisperApp = () => {
               />
             </div>
           
-            {/* Online/Offline Status */}
             <div className="flex items-center space-x-2">
               {isOnline ? (
                 <div className="flex items-center space-x-1 text-green-600">
@@ -574,7 +595,6 @@ const WhisperApp = () => {
             </div>
           </div>
 
-          {/* Pending Queue Indicator */}
           {pendingQueue.length > 0 && (
             <div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-2 flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -732,6 +752,18 @@ const WhisperApp = () => {
         <div className="text-center mb-6">
           {isRecording && (
             <div className="mb-4">
+              {/* Live Transcription Display */}
+              <div className="bg-white rounded-lg shadow-lg p-4 mb-4 min-h-24 border-2 border-blue-400">
+                <p className="text-xs text-gray-500 mb-2 font-semibold">LIVE TRANSCRIPTION:</p>
+                <p className="text-lg text-gray-900 font-medium leading-relaxed">
+                  {liveTranscript || <span className="text-gray-400 italic">Listening...</span>}
+                  {interimTranscript && (
+                    <span className="text-gray-400 italic"> {interimTranscript}</span>
+                  )}
+                </p>
+              </div>
+
+              {/* Audio Visualization */}
               <div className="flex items-end justify-center space-x-1 h-16 mb-3">
                 {[...Array(15)].map((_, i) => (
                   <div
@@ -747,7 +779,7 @@ const WhisperApp = () => {
               <div className="text-2xl font-bold text-gray-800 mb-2">
                 {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
               </div>
-              <p className="text-sm text-gray-600">Say "Stop recording" to finish</p>
+              <p className="text-sm text-gray-600 font-medium">Say "Stop recording" to finish</p>
             </div>
           )}
 
