@@ -279,7 +279,7 @@ const WhisperApp = () => {
 
     for (const insight of pendingQueue) {
       try {
-        const response = await fetch('/api/submit-insight', {
+        const response = await fetch('https://boardwalk-dashboard.vercel.app/api/submit-insight', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -491,7 +491,7 @@ const WhisperApp = () => {
     }
 
     try {
-      const response = await fetch('/api/submit-insight', {
+      const response = await fetch('https://boardwalk-dashboard.vercel.app/api/submit-insight', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(insightData)
