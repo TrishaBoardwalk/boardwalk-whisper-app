@@ -27,6 +27,7 @@ const WhisperApp = () => {
   const recognitionRef = useRef(null);
   const wakeWordRecognitionRef = useRef(null);
   const transcriptRef = useRef('');
+  const isRecordingRef = useRef(false);
 
   // Audio feedback
   const playBeep = (frequency = 800, duration = 200) => {
@@ -81,7 +82,7 @@ const WhisperApp = () => {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
-      recognitionRef.current.maxAlternatives = 3; // Get multiple alternatives for better accuracy
+      recognitionRef.current.maxAlternatives = 3;
       
       recognitionRef.current.onresult = (event) => {
         let interimText = '';
@@ -91,12 +92,10 @@ const WhisperApp = () => {
           const result = event.results[i];
           const transcript = result[0].transcript;
           
-          // Use confidence threshold - only accept high confidence results
           const confidence = result[0].confidence;
           console.log('Confidence:', confidence, 'Text:', transcript);
           
           if (result.isFinal) {
-            // Only add if confidence is decent (above 0.5)
             if (confidence > 0.5 || confidence === undefined) {
               finalText += transcript + ' ';
             }
@@ -105,26 +104,27 @@ const WhisperApp = () => {
           }
         }
 
-        const fullTranscript = (finalText + interimText).trim();
-        transcriptRef.current = finalText.trim(); // Only store final text
+        transcriptRef.current += finalText;
         
         // Update live display
-        setLiveTranscript(finalText.trim());
+        setLiveTranscript(transcriptRef.current.trim());
         setInterimTranscript(interimText.trim());
 
-        // Check for stop command
-        const lowerText = fullTranscript.toLowerCase();
+        // Check for stop command in both final and interim text
+        const lowerText = (finalText + interimText).toLowerCase();
         if (lowerText.includes('stop recording') || 
+            lowerText.includes('stop') ||
             lowerText.includes('submit') ||
-            lowerText.endsWith('stop')) {
-          stopRecording();
+            lowerText.includes('done')) {
+          if (isRecordingRef.current) {
+            stopRecording();
+          }
         }
       };
 
       recognitionRef.current.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
         if (event.error === 'no-speech') {
-          // Don't show error for no-speech, just keep listening
           console.log('No speech detected, continuing...');
         } else if (event.error === 'audio-capture') {
           setError('Microphone error. Please check your microphone.');
@@ -136,7 +136,7 @@ const WhisperApp = () => {
       };
 
       recognitionRef.current.onend = () => {
-        if (isRecording) {
+        if (isRecordingRef.current) {
           try {
             recognitionRef.current.start();
           } catch (e) {
@@ -169,7 +169,7 @@ const WhisperApp = () => {
       };
 
       wakeWordRecognitionRef.current.onend = () => {
-        if (voiceActivationEnabled && !isRecording) {
+        if (voiceActivationEnabled && !isRecordingRef.current) {
           try {
             wakeWordRecognitionRef.current.start();
           } catch (e) {
@@ -348,7 +348,7 @@ const WhisperApp = () => {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: 48000 // Higher sample rate for better quality
+          sampleRate: 48000
         }
       });
       
@@ -365,6 +365,7 @@ const WhisperApp = () => {
 
       try {
         recognitionRef.current.start();
+        isRecordingRef.current = true;
         setIsRecording(true);
         playBeep(1000, 100);
       } catch (e) {
@@ -384,8 +385,9 @@ const WhisperApp = () => {
   };
 
   const stopRecording = async () => {
-    if (!isRecording) return;
+    if (!isRecordingRef.current) return;
 
+    isRecordingRef.current = false;
     setIsRecording(false);
     setAudioLevel(0);
 
@@ -426,7 +428,8 @@ const WhisperApp = () => {
       const cleanedTranscription = transcription
         .replace(/stop recording/gi, '')
         .replace(/\bsubmit\b/gi, '')
-        .replace(/\bstop\b$/gi, '')
+        .replace(/\bdone\b/gi, '')
+        .replace(/\bstop\b/gi, '')
         .trim();
 
       if (cleanedTranscription) {
@@ -435,7 +438,6 @@ const WhisperApp = () => {
         setError('No speech detected. Please try again and speak clearly.');
       }
       
-      // Clear live transcript
       setLiveTranscript('');
       setInterimTranscript('');
     }, 500);
@@ -663,7 +665,7 @@ const WhisperApp = () => {
                 • "Record guest"
               </p>
               <p className="text-xs text-blue-600 mt-2">
-                To stop: Say "Stop recording" or "Submit"
+                To stop: Say "Stop", "Done", "Stop recording", or "Submit"
               </p>
             </div>
           )}
@@ -779,7 +781,7 @@ const WhisperApp = () => {
               <div className="text-2xl font-bold text-gray-800 mb-2">
                 {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
               </div>
-              <p className="text-sm text-gray-600 font-medium">Say "Stop recording" to finish</p>
+              <p className="text-sm text-gray-600 font-medium">Say "Stop" or "Done" to finish</p>
             </div>
           )}
 
